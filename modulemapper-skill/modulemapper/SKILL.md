@@ -7,176 +7,177 @@ description: >
   "should I take [course code]?", or any request involving course reviews, module feedback,
   workload, grading, or student opinions about a university course. Always use this skill — don't
   just answer from training data, actually run the research workflow.
+license: MIT
+metadata:
+  author: KrishnaAgarwal7531
+  version: "1.0"
+  tags: university courses reviews scraping tinyfish research
 ---
 
 # ModuleMapper Skill
 
 Research any university course by scraping live student reviews from Reddit, RateMyProfessors,
-the university's course platform, and student blogs — then synthesise them into a structured verdict.
+the university's course platform, and student blogs — then synthesise into a structured verdict.
 
-## Prerequisites
+---
 
-You need a **TinyFish API key** set as `TINYFISH_API_KEY` in your environment.  
-Get one free at: https://agent.tinyfish.ai/api-keys
+## Pre-flight Check (REQUIRED)
+
+Before doing anything, verify the TinyFish API key is available:
+
+```bash
+echo $TINYFISH_API_KEY
+```
+
+If empty or missing, **stop and tell the user:**
+
+> You need a TinyFish API key. Get one free (500 steps, no credit card) at:
+> https://agent.tinyfish.ai/api-keys
+> Then set it: `export TINYFISH_API_KEY="your-key-here"`
+
+Do NOT proceed until the key is confirmed.
 
 ---
 
 ## Workflow (always follow in order)
 
 ```
-1. DISCOVER  →  resolve university profile (subreddits, platform URL, RMP query)
-2. SCRAPE    →  run TinyFish agents in parallel across all sources
-3. SYNTHESISE →  analyse all raw data and produce the final verdict
-4. PRESENT   →  display the verdict clearly to the user
+1. DISCOVER   →  find subreddits, course platform URL, official page in real-time
+2. SCRAPE     →  run all TinyFish agents concurrently across all sources
+3. SYNTHESISE →  analyse raw data and produce the structured verdict
+4. PRESENT    →  display results clearly to the user
 ```
 
 ---
 
 ## Step 1 — Discover
 
-Given `{COURSE_CODE}` and `{UNIVERSITY}`, you need to figure out the right sources to scrape.
-**Do this in real-time — do not rely on hardcoded URLs.** Universities change platforms, and
-new ones are always being added.
+Given `{COURSE_CODE}` and `{UNIVERSITY}`, find the right sources via real-time web search.
+**Never use hardcoded URLs** — universities change platforms constantly.
 
-### 1a. Find the relevant subreddits
-Web search: `"{UNIVERSITY} reddit"` or `"site:reddit.com {UNIVERSITY} courses"`
-Look for the university's own subreddit (e.g. r/nus, r/berkeley) plus any regional academic
-subreddits (e.g. r/SGExams, r/UniUK). Pick the 2 most relevant.
+**1a. Subreddits** — search `"{UNIVERSITY} reddit"` → find the university's own sub (e.g. r/nus,
+r/berkeley) + a regional academic sub (e.g. r/SGExams, r/UniUK, r/college). Pick 2.
 
-### 1b. Find the course review platform
-Web search: `"{UNIVERSITY} course review platform"` or `"{UNIVERSITY} module review"`
-You're looking for a student-run or university-run site where students rate and review courses —
-things like NUSMods, Bruinwalk (UCLA), Carta (Stanford), Course Evals (UofT), etc.
-If you find one, construct the direct URL for this specific course code if possible.
+**1b. Course review platform** — search `"{UNIVERSITY} course review"` → look for student-run
+or university-run rating sites (NUSMods, Bruinwalk, Carta, Course Evals, etc.). Build the
+direct URL for this course code if found. If unsure, skip — don't guess.
 
-### 1c. Find the official course page
-Web search: `"{UNIVERSITY} {COURSE_CODE} official course page"` or `"{UNIVERSITY} course catalog {COURSE_CODE}"`
-Look for the university's own catalog or handbook page for this specific course.
+**1c. Official course page** — search `"{UNIVERSITY} {COURSE_CODE} course"` → find the
+university's own catalog page. If unsure, skip.
 
-### 1d. Set the standard queries
+**1d. Set queries:**
 - `rmpQuery` = `"{COURSE_CODE} {UNIVERSITY}"`
 - `blogQuery` = `"{COURSE_CODE} {UNIVERSITY} course review"`
-
-> **Key principle:** a quick web search at discover time is much better than a stale hardcoded
-> table. If you can't find a platform or official page, just skip those agents — the Reddit +
-> RateMyProfessors + blogs agents will still give good coverage.
 
 ---
 
 ## Step 2 — Scrape
 
-Run **all agents concurrently** using TinyFish. Always use `browser_profile: "stealth"`.
-
-**Always run these agents:**
+Run **all agents concurrently** — parallel calls, NOT sequential.
+Always set `browser_profile: "stealth"` on every call.
+Result is in the SSE event where `type == "COMPLETE"` and `status == "COMPLETED"` → read `resultJson`.
 
 ### Agent: Rate My Professors
 ```
+POST https://agent.tinyfish.ai/v1/automation/run-sse
 URL: https://www.ratemyprofessors.com/search/professors?q={rmpQuery}
+browser_profile: stealth
 
 GOAL:
-Search Rate My Professors for professors teaching {CODE} at {UNIVERSITY}.
-
-STEP 1: Find professors associated with this course or department.
-STEP 2: Click into each professor's profile and read ALL written reviews, not just ratings.
-STEP 3: For each professor extract:
-- Overall rating and difficulty rating
-- Every written student review (full text)
-- Recurring themes (fair grader? hard exams? engaging lectures?)
-
-Return as JSON:
+Extract professor reviews for {CODE} at {UNIVERSITY}.
+You are on the search results. Act efficiently:
+1. Scan listed professors. Only click those who clearly teach {CODE} or its dept. Max 3.
+2. On each profile, read ratings and visible written reviews. Do NOT paginate or load more.
+3. Return immediately as JSON:
 {
   "professors": [
-    {
-      "name": "Prof name",
-      "overallRating": 4.2,
-      "difficultyRating": 3.1,
-      "reviews": ["Full text of review 1", ...]
-    }
+    { "name": "...", "overallRating": 4.2, "difficultyRating": 3.1, "reviews": ["...", ...] }
   ]
 }
+Do not explore unrelated professors or pages.
 ```
 
-### Agent: Reddit (run for first 2 subreddits)
+### Agent: Reddit (one call per subreddit, max 2, run in parallel)
 ```
-URL: https://www.reddit.com/r/{subreddit}/search/?q={CODE}+{UNIVERSITY}&sort=relevance&t=all
+POST https://agent.tinyfish.ai/v1/automation/run-sse
+URL: https://www.reddit.com/r/{subreddit}/search/?q={CODE}&sort=relevance&t=all
+browser_profile: stealth
 
 GOAL:
-Search Reddit for detailed student reviews of {CODE} at {UNIVERSITY}.
-
-STEP 1: Find posts about this specific course — look for titles mentioning "{CODE}",
-        module reviews, course advice.
-STEP 2: Click into 3-5 of the most relevant posts and read the FULL post AND all top comments.
-STEP 3: Extract:
-- Full text of each post and substantial comments
-- Mentions of: workload, weekly hours, exams, assignments, grading, bell curve,
-  professor names, tips, difficulty, what you actually learn
-
-Return as JSON:
+Extract student reviews of {CODE} at {UNIVERSITY} from this Reddit search page.
+You are already on the results. Act efficiently:
+1. Scan titles. Click only posts clearly about {CODE} — reviews, advice, experience. Max 2 posts.
+2. Read post body and top 5-8 comments only. Do NOT scroll or load more.
+3. Extract: workload, difficulty, grading, exam tips, professor mentions, recommendation.
+4. Return immediately as JSON:
 {
-  "reviews": ["Detailed paraphrase including context like semester, background, grade", ...],
-  "workloadMentions": ["any specific mentions of hours/week or workload"],
-  "examTips": ["tips about exams or assessments"],
-  "professorMentions": ["mentions of specific professors"],
-  "gradingInfo": ["mentions of grades, bell curve, average grade"]
+  "reviews": ["student quote or paraphrase with context", ...],
+  "workloadMentions": ["..."],
+  "examTips": ["..."],
+  "professorMentions": ["..."],
+  "gradingInfo": ["..."]
 }
+Max 2 posts. Do not click anything unrelated.
 ```
 
-### Agent: Course Platform (only if courseplatformUrl exists)
+### Agent: Course Platform (only if URL found in Step 1)
 ```
+POST https://agent.tinyfish.ai/v1/automation/run-sse
 URL: {courseplatformUrl}
+browser_profile: stealth
 
 GOAL:
-Extract all student reviews and ratings for {CODE}.
-Get: overall rating, workload rating, difficulty rating, all written reviews.
-Return as JSON: { overallRating, workloadRating, difficultyRating, reviews: [...] }
+Extract reviews and ratings for {CODE}. You are already on the page — do NOT navigate away.
+Read only what is visible: overall rating, workload rating, difficulty rating, written reviews.
+Return as JSON:
+{ "overallRating": 4.1, "workloadRating": 3.5, "difficultyRating": 3.8, "reviews": ["...", ...] }
 ```
 
-### Agent: Official Course Page (only if officialUrl exists)
+### Agent: Official Course Page (only if URL found in Step 1)
 ```
+POST https://agent.tinyfish.ai/v1/automation/run-sse
 URL: {officialUrl}
+browser_profile: stealth
 
 GOAL:
-Extract the official course description for {CODE}.
-Get: title, full description, learning outcomes, topics, prerequisites,
-assessment breakdown (exam %, CA %, project %).
-Return as JSON: { title, description, learningOutcomes, topics, prerequisites, assessmentBreakdown }
+Extract official info for {CODE}. You are on the page — do NOT navigate.
+Get: title, description, learning outcomes, topics, prerequisites, assessment breakdown.
+Return as JSON:
+{ "title": "...", "description": "...", "learningOutcomes": ["..."], "topics": ["..."], "prerequisites": "...", "assessmentBreakdown": "..." }
 ```
 
 ### Agent: Student Blogs
 ```
-URL: https://www.google.com/search?q={blogQuery}+site:medium.com+OR+site:reddit.com+OR+site:wordpress.com
+POST https://agent.tinyfish.ai/v1/automation/run-sse
+URL: https://www.google.com/search?q={blogQuery}
+browser_profile: stealth
 
 GOAL:
-Find student blog posts reviewing {CODE} at {UNIVERSITY}.
-STEP 1: Find blog posts that are actual student reviews.
-STEP 2: Click into 2-3 most relevant results and read the FULL article.
-STEP 3: Extract verdict, workload details, tips, background of the student.
-
-Return as JSON:
-{
-  "reviews": ["Detailed paraphrase with experience, recommendation, and advice", ...],
-  "source_urls": ["url of each article"]
-}
+Find student blog reviews of {CODE} at {UNIVERSITY}.
+You are on Google results. Act efficiently:
+1. Scan results. Click only if title/snippet clearly indicates a personal student review of {CODE}. Max 3.
+2. On each article, read main content only. Extract verdict, workload, exam tips, recommendation.
+3. Return as JSON:
+{ "reviews": ["paraphrase of experience and advice", ...], "source_urls": ["url", ...] }
+If nothing looks relevant, return { "reviews": [], "source_urls": [] } immediately.
 ```
 
 ---
 
 ## Step 3 — Synthesise
 
-Collect all raw results (skip any that errored). Pass them to Claude or any LLM with this prompt:
+Collect all results where `status == "COMPLETED"`. Skip errored agents.
+Pass to an LLM with this prompt:
 
 ```
-You are an expert at analysing student course reviews.
-Analyse the following scraped data about {CODE} at {UNIVERSITY}
-and return a structured JSON verdict.
-
-The data may include Reddit posts with fields like "reviews", "workloadMentions",
-"examTips", "professorMentions", "gradingInfo" — use ALL of these.
+Analyse scraped student review data for {CODE} at {UNIVERSITY}.
+Data may include Reddit fields "reviews", "workloadMentions", "examTips",
+"professorMentions", "gradingInfo" — use ALL of them.
 
 SCRAPED DATA:
-{all raw results joined with === SOURCE: {name} === headers}
+{all raw results, each prefixed: === SOURCE: {name} ===}
 
-Return ONLY valid JSON with this structure:
+Return ONLY valid JSON:
 {
   "score": <1-10>,
   "verdict": <e.g. "Generally recommended">,
@@ -188,46 +189,27 @@ Return ONLY valid JSON with this structure:
   "examDifficulty": <"Easy"|"Moderate"|"Hard"|"Very Hard">,
   "averageGrade": <e.g. "B+" or "Unknown">,
   "gradingPattern": <e.g. "Bell curved">,
-  "assessment": <description of components>,
-  "attendance": <e.g. "Affects grade" or "Not graded">,
-  "whatYouLearn": [<4-6 learning outcomes>],
-  "tags": [{"label": <string>, "color": <"blue"|"green"|"amber"|"red">}],
+  "assessment": <components>,
+  "attendance": <e.g. "Affects grade">,
+  "whatYouLearn": [<4-6 outcomes>],
+  "tags": [{"label": "...", "color": "blue"|"green"|"amber"|"red"}],
   "bestFor": <who should take this>,
   "notGreatIf": <who should avoid>,
-  "reviews": [
-    {"text": <student quote>, "source": <name>, "sentiment": <"positive"|"negative"|"mixed">, "date": ""}
-  ],
-  "sourceCounts": { <source>: <count> }
+  "reviews": [{"text": "...", "source": "...", "sentiment": "positive"|"negative"|"mixed", "date": ""}],
+  "sourceCounts": { "<source>": <count> }
 }
-
-Rules:
-- score reflects genuine student sentiment
-- Extract at least 8 real student quotes for reviews
-- whatYouLearn comes from official page if available
-- tags: blue=general info, green=positive, amber=warning, red=negative
-- Use "Unknown" for any field with insufficient data
+Rules: score = genuine sentiment · at least 8 real student quotes · "Unknown" if insufficient data
 ```
 
 ---
 
 ## Step 4 — Present
 
-Display the verdict conversationally. Always include:
-
-- **Score & verdict** — e.g. "7.2/10 — Generally recommended"
-- **Summary paragraph**
-- **Key stats** — difficulty, workload, hrs/week, exam info, average grade, attendance
-- **Tags** — inline labels
-- **Best for / Not great if**
-- **What you'll learn** — bullet list
-- **Student reviews** — at least 4–6 quotes with source labels
-- **Source breakdown** — how many reviews came from each source
+Always include: Score & verdict · Summary · Key stats (difficulty, workload, hrs/week, exam, grade, attendance) · Tags · Best for / Not great if · What you'll learn · At least 4-6 student quotes with source labels.
 
 ---
 
 ## Notes
-
-- If TinyFish errors on a source, skip it and note it in the output
-- If fewer than 2 sources return data, tell the user results may be limited
-- The skill works for any university worldwide — use the fallback profile for unknown ones
-- See `references/universities.md` for the full university profile table
+- Skip and note any TinyFish source that errors
+- Warn user if fewer than 2 sources succeed
+- Works for any university worldwide — real-time discovery handles all cases
