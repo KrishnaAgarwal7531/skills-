@@ -10,7 +10,7 @@ description: >
 license: MIT
 metadata:
   author: KrishnaAgarwal7531
-  version: "1.1"
+  version: "1.2"
   tags: university courses reviews scraping tinyfish research
 ---
 
@@ -23,180 +23,142 @@ the university's course platform, and student blogs — then synthesise into a s
 
 ## Pre-flight Check (REQUIRED)
 
-Run both checks before doing anything:
-
 **1. CLI installed?**
 ```bash
 which tinyfish && tinyfish --version || echo "TINYFISH_CLI_NOT_INSTALLED"
 ```
-If not installed, stop and tell the user:
-```bash
-npm install -g @tiny-fish/cli
-```
+If not installed, stop and tell the user: `npm install -g @tiny-fish/cli`
 
 **2. Authenticated?**
 ```bash
 tinyfish auth status
 ```
-If not authenticated, stop and tell the user to run:
-```bash
-tinyfish auth login
-```
-This opens a browser to sign in once — no API key setup needed after that.
+If not authenticated, stop and tell the user: `tinyfish auth login`
 
 Do NOT proceed until both checks pass.
-
----
-
-## Workflow (always follow in order)
-
-```
-1. DISCOVER   →  find subreddits, course platform URL, official page in real-time
-2. SCRAPE     →  run all TinyFish agents concurrently across all sources
-3. SYNTHESISE →  analyse raw data and produce the structured verdict
-4. PRESENT    →  display results clearly to the user
-```
 
 ---
 
 ## Step 1 — Discover
 
 Given `{COURSE_CODE}` and `{UNIVERSITY}`, find the right sources via real-time web search.
-Never use hardcoded URLs — universities change platforms constantly.
+Never use hardcoded URLs.
 
-**1a. Subreddits** — search `"{UNIVERSITY} reddit"` → find the university's own sub (e.g. r/nus,
-r/berkeley) + a regional academic sub (e.g. r/SGExams, r/UniUK, r/college). Pick 2.
-
-**1b. Course review platform** — search `"{UNIVERSITY} course review"` → look for student-run
-or university-run rating sites (NUSMods, Bruinwalk, Carta, Course Evals, etc.). Build the
-direct URL for this course code if found. If unsure, skip — don't guess.
-
-**1c. Official course page** — search `"{UNIVERSITY} {COURSE_CODE} course"` → find the
-university's own catalog page. If unsure, skip.
-
-**1d. Set queries:**
-- `rmpQuery` = `"{COURSE_CODE} {UNIVERSITY}"`
-- `blogQuery` = `"{COURSE_CODE} {UNIVERSITY} course review"`
+- **Subreddits** — find the university's own sub + a regional academic sub. Pick 2.
+- **Course review platform** — find student-run rating site (NUSMods, Bruinwalk, Carta, etc.) and build the direct URL for this course. If unsure, skip.
+- **Official course page** — find the university catalog page for this code. If unsure, skip.
+- Set `rmpQuery` = `"{COURSE_CODE} {UNIVERSITY}"`
+- Set `blogQuery` = `"{COURSE_CODE} {UNIVERSITY} course review"`
 
 ---
 
-## Step 2 — Scrape
+## Step 2 — Scrape in Parallel
 
-Run **all agents concurrently** — parallel CLI calls, NOT sequential.
-The final result is the event where `type == "COMPLETE"` and `status == "COMPLETED"` — read `resultJson`.
+Run ALL agents at the same time using background processes. Do NOT run them one by one.
 
-### Agent: Rate My Professors
 ```bash
-tinyfish agent run \
+# Fire all agents in parallel
+tinyfish agent run --sync \
   --url "https://www.ratemyprofessors.com/search/professors?q={rmpQuery}" \
-  "Extract professor reviews for {CODE} at {UNIVERSITY}.
-  You are on the search results. Act efficiently:
-  1. Scan listed professors. Only click those who clearly teach {CODE} or its dept. Max 3.
-  2. On each profile, read ratings and visible written reviews. Do NOT paginate or load more.
-  3. Return immediately as JSON:
-  { \"professors\": [{ \"name\": \"...\", \"overallRating\": 4.2, \"difficultyRating\": 3.1, \"reviews\": [\"...\"] }] }
-  Do not explore unrelated professors or pages."
-```
+  "Extract professor reviews for {CODE} at {UNIVERSITY}. Scan professors, only click those who teach {CODE}, max 3. Read visible reviews only, do NOT paginate. Return JSON: {\"professors\": [{\"name\": \"...\", \"overallRating\": 4.2, \"difficultyRating\": 3.1, \"reviews\": [\"...\"]}]}" \
+  > /tmp/mm_rmp.json 2>&1 &
 
-### Agent: Reddit (one call per subreddit, max 2, run in parallel)
-```bash
-tinyfish agent run \
-  --url "https://www.reddit.com/r/{subreddit}/search/?q={CODE}&sort=relevance&t=all" \
-  "Extract student reviews of {CODE} at {UNIVERSITY} from this Reddit search page.
-  You are already on the results. Act efficiently:
-  1. Scan titles. Click only posts clearly about {CODE} — reviews, advice, experience. Max 2 posts.
-  2. Read post body and top 5-8 comments only. Do NOT scroll or load more.
-  3. Extract: workload, difficulty, grading, exam tips, professor mentions, recommendation.
-  4. Return immediately as JSON:
-  { \"reviews\": [\"...\"], \"workloadMentions\": [\"...\"], \"examTips\": [\"...\"], \"professorMentions\": [\"...\"], \"gradingInfo\": [\"...\"] }
-  Max 2 posts. Do not click anything unrelated."
-```
+tinyfish agent run --sync \
+  --url "https://www.reddit.com/r/{subreddit1}/search/?q={CODE}&sort=relevance&t=all" \
+  "Extract student reviews of {CODE} at {UNIVERSITY}. Click max 2 relevant posts only. Read post + top 5-8 comments. Return JSON: {\"reviews\": [\"...\"], \"workloadMentions\": [\"...\"], \"examTips\": [\"...\"], \"professorMentions\": [\"...\"], \"gradingInfo\": [\"...\"]}" \
+  > /tmp/mm_reddit1.json 2>&1 &
 
-### Agent: Course Platform (only if URL found in Step 1)
-```bash
-tinyfish agent run \
-  --url "{courseplatformUrl}" \
-  "Extract reviews and ratings for {CODE}. You are already on the page — do NOT navigate away.
-  Read only what is visible: overall rating, workload rating, difficulty rating, written reviews.
-  Return as JSON:
-  { \"overallRating\": 4.1, \"workloadRating\": 3.5, \"difficultyRating\": 3.8, \"reviews\": [\"...\"] }"
-```
+tinyfish agent run --sync \
+  --url "https://www.reddit.com/r/{subreddit2}/search/?q={CODE}&sort=relevance&t=all" \
+  "Extract student reviews of {CODE} at {UNIVERSITY}. Click max 2 relevant posts only. Read post + top 5-8 comments. Return JSON: {\"reviews\": [\"...\"], \"workloadMentions\": [\"...\"], \"examTips\": [\"...\"], \"professorMentions\": [\"...\"], \"gradingInfo\": [\"...\"]}" \
+  > /tmp/mm_reddit2.json 2>&1 &
 
-### Agent: Official Course Page (only if URL found in Step 1)
-```bash
-tinyfish agent run \
-  --url "{officialUrl}" \
-  "Extract official info for {CODE}. You are on the page — do NOT navigate.
-  Get: title, description, learning outcomes, topics, prerequisites, assessment breakdown.
-  Return as JSON:
-  { \"title\": \"...\", \"description\": \"...\", \"learningOutcomes\": [\"...\"], \"topics\": [\"...\"], \"prerequisites\": \"...\", \"assessmentBreakdown\": \"...\" }"
-```
-
-### Agent: Student Blogs
-```bash
-tinyfish agent run \
+tinyfish agent run --sync \
   --url "https://www.google.com/search?q={blogQuery}" \
-  "Find student blog reviews of {CODE} at {UNIVERSITY}.
-  You are on Google results. Act efficiently:
-  1. Scan results. Click only if title/snippet clearly indicates a personal student review of {CODE}. Max 3.
-  2. On each article, read main content only. Extract verdict, workload, exam tips, recommendation.
-  3. Return as JSON:
-  { \"reviews\": [\"paraphrase of experience and advice\"], \"source_urls\": [\"url\"] }
-  If nothing looks relevant, return { \"reviews\": [], \"source_urls\": [] } immediately."
+  "Find student blog reviews of {CODE} at {UNIVERSITY}. Click max 3 clearly relevant results. Read main content only. Return JSON: {\"reviews\": [\"...\"], \"source_urls\": [\"...\"]}" \
+  > /tmp/mm_blogs.json 2>&1 &
+
+# If course platform URL was found in Step 1, also run:
+tinyfish agent run --sync \
+  --url "{courseplatformUrl}" \
+  "Extract reviews and ratings for {CODE}. Read only what is visible on this page. Return JSON: {\"overallRating\": 4.1, \"workloadRating\": 3.5, \"difficultyRating\": 3.8, \"reviews\": [\"...\"]}" \
+  > /tmp/mm_platform.json 2>&1 &
+
+# Wait for ALL agents to finish
+wait
+
+# Read all results
+RMP=$(cat /tmp/mm_rmp.json 2>/dev/null)
+REDDIT1=$(cat /tmp/mm_reddit1.json 2>/dev/null)
+REDDIT2=$(cat /tmp/mm_reddit2.json 2>/dev/null)
+BLOGS=$(cat /tmp/mm_blogs.json 2>/dev/null)
+PLATFORM=$(cat /tmp/mm_platform.json 2>/dev/null)
 ```
 
 ---
 
 ## Step 3 — Synthesise
 
-Collect all results where `status == "COMPLETED"`. Skip errored agents.
-Pass to an LLM with this prompt:
+Take all the collected results and analyse them together. Produce a verdict with:
 
-```
-Analyse scraped student review data for {CODE} at {UNIVERSITY}.
-Data may include Reddit fields "reviews", "workloadMentions", "examTips",
-"professorMentions", "gradingInfo" — use ALL of them.
-
-SCRAPED DATA:
-{all raw results, each prefixed: === SOURCE: {name} ===}
-
-Return ONLY valid JSON:
-{
-  "score": <1-10>,
-  "verdict": <e.g. "Generally recommended">,
-  "summary": <2-3 sentence paragraph>,
-  "difficulty": <1-10>,
-  "workload": <1-10>,
-  "hoursPerWeek": <e.g. "~6 hrs/week">,
-  "hasExam": <boolean>,
-  "examDifficulty": <"Easy"|"Moderate"|"Hard"|"Very Hard">,
-  "averageGrade": <e.g. "B+" or "Unknown">,
-  "gradingPattern": <e.g. "Bell curved">,
-  "assessment": <components>,
-  "attendance": <e.g. "Affects grade">,
-  "whatYouLearn": [<4-6 outcomes>],
-  "tags": [{"label": "...", "color": "blue"|"green"|"amber"|"red"}],
-  "bestFor": <who should take this>,
-  "notGreatIf": <who should avoid>,
-  "reviews": [{"text": "...", "source": "...", "sentiment": "positive"|"negative"|"mixed", "date": ""}],
-  "sourceCounts": { "<source>": <count> }
-}
-Rules: score = genuine sentiment · at least 8 real student quotes · "Unknown" if insufficient data
-```
+- **Score** — 1 to 10 based on genuine student sentiment
+- **Verdict** — one line e.g. "Generally recommended" or "Mixed reviews"
+- **Summary** — 2-3 sentences capturing the overall experience
+- **Difficulty** — 1 to 10
+- **Workload** — 1 to 10 with estimated hours per week
+- **Exam info** — has final exam? how hard?
+- **Average grade** — what most students get
+- **Grading pattern** — bell curved? absolute?
+- **Assessment breakdown** — exams, assignments, projects
+- **Attendance** — does it affect grade?
+- **What you'll learn** — 4 to 6 key outcomes
+- **Tags** — e.g. "Heavy workload", "Great prof", "Bell curved", "Project heavy"
+- **Best for** — who should take this
+- **Not great if** — who should avoid it
+- **Student reviews** — at least 6 real quotes from scraped data with source labels
 
 ---
 
 ## Step 4 — Present
 
-Always include: Score & verdict · Summary · Key stats (difficulty, workload, hrs/week, exam, grade, attendance) · Tags · Best for / Not great if · What you'll learn · At least 4-6 student quotes with source labels.
+Display the verdict clearly. Format it like this:
+
+```
+📊 {CODE} · {UNIVERSITY}
+{Course Title}
+
+Score: {score}/10 — {verdict}
+
+{summary paragraph}
+
+─────────────────────────
+Difficulty:  {x}/10
+Workload:    {x}/10 · {hoursPerWeek}
+Avg Grade:   {averageGrade} ({gradingPattern})
+Final Exam:  {Yes/No} · {examDifficulty}
+Attendance:  {attendance}
+Assessment:  {assessment}
+─────────────────────────
+
+What you'll learn:
+• {outcome1}
+• {outcome2}
+• ...
+
+Tags: {tag1} · {tag2} · {tag3}
+
+✅ Best for: {bestFor}
+❌ Not great if: {notGreatIf}
+
+Student Reviews:
+"{review1}" — {source}
+"{review2}" — {source}
+...
+```
 
 ---
 
-## Security Notes
-- This skill scrapes live user-generated content from public sites. All scraped data is passed to an LLM for synthesis only, not executed.
-- Only use your own TinyFish account authenticated via `tinyfish auth login`.
-
 ## Notes
-- Skip and note any TinyFish source that errors
+- Skip any agent that errors and note it
 - Warn user if fewer than 2 sources succeed
-- Works for any university worldwide — real-time discovery handles all cases
+- Works for any university worldwide
