@@ -10,7 +10,7 @@ description: >
 license: MIT
 metadata:
   author: KrishnaAgarwal7531
-  version: "1.0"
+  version: "1.1"
   tags: university courses reviews scraping tinyfish research
 ---
 
@@ -23,19 +23,28 @@ the university's course platform, and student blogs — then synthesise into a s
 
 ## Pre-flight Check (REQUIRED)
 
-Before doing anything, verify the TinyFish API key is available:
+Run both checks before doing anything:
 
+**1. CLI installed?**
 ```bash
-echo $TINYFISH_API_KEY
+which tinyfish && tinyfish --version || echo "TINYFISH_CLI_NOT_INSTALLED"
+```
+If not installed, stop and tell the user:
+```bash
+npm install -g @tiny-fish/cli
 ```
 
-If empty or missing, **stop and tell the user:**
+**2. Authenticated?**
+```bash
+tinyfish auth status
+```
+If not authenticated, stop and tell the user to run:
+```bash
+tinyfish auth login
+```
+This opens a browser to sign in once — no API key setup needed after that.
 
-> You need a TinyFish API key. Get one free (500 steps, no credit card) at:
-> https://agent.tinyfish.ai/api-keys
-> Then set it: `export TINYFISH_API_KEY="your-key-here"`
-
-Do NOT proceed until the key is confirmed.
+Do NOT proceed until both checks pass.
 
 ---
 
@@ -53,7 +62,7 @@ Do NOT proceed until the key is confirmed.
 ## Step 1 — Discover
 
 Given `{COURSE_CODE}` and `{UNIVERSITY}`, find the right sources via real-time web search.
-**Never use hardcoded URLs** — universities change platforms constantly.
+Never use hardcoded URLs — universities change platforms constantly.
 
 **1a. Subreddits** — search `"{UNIVERSITY} reddit"` → find the university's own sub (e.g. r/nus,
 r/berkeley) + a regional academic sub (e.g. r/SGExams, r/UniUK, r/college). Pick 2.
@@ -73,93 +82,67 @@ university's own catalog page. If unsure, skip.
 
 ## Step 2 — Scrape
 
-Run **all agents concurrently** — parallel calls, NOT sequential.
-Always set `browser_profile: "stealth"` on every call.
-Result is in the SSE event where `type == "COMPLETE"` and `status == "COMPLETED"` → read `resultJson`.
+Run **all agents concurrently** — parallel CLI calls, NOT sequential.
+The final result is the event where `type == "COMPLETE"` and `status == "COMPLETED"` — read `resultJson`.
 
 ### Agent: Rate My Professors
-```
-POST https://agent.tinyfish.ai/v1/automation/run-sse
-URL: https://www.ratemyprofessors.com/search/professors?q={rmpQuery}
-browser_profile: stealth
-
-GOAL:
-Extract professor reviews for {CODE} at {UNIVERSITY}.
-You are on the search results. Act efficiently:
-1. Scan listed professors. Only click those who clearly teach {CODE} or its dept. Max 3.
-2. On each profile, read ratings and visible written reviews. Do NOT paginate or load more.
-3. Return immediately as JSON:
-{
-  "professors": [
-    { "name": "...", "overallRating": 4.2, "difficultyRating": 3.1, "reviews": ["...", ...] }
-  ]
-}
-Do not explore unrelated professors or pages.
+```bash
+tinyfish agent run \
+  --url "https://www.ratemyprofessors.com/search/professors?q={rmpQuery}" \
+  "Extract professor reviews for {CODE} at {UNIVERSITY}.
+  You are on the search results. Act efficiently:
+  1. Scan listed professors. Only click those who clearly teach {CODE} or its dept. Max 3.
+  2. On each profile, read ratings and visible written reviews. Do NOT paginate or load more.
+  3. Return immediately as JSON:
+  { \"professors\": [{ \"name\": \"...\", \"overallRating\": 4.2, \"difficultyRating\": 3.1, \"reviews\": [\"...\"] }] }
+  Do not explore unrelated professors or pages."
 ```
 
 ### Agent: Reddit (one call per subreddit, max 2, run in parallel)
-```
-POST https://agent.tinyfish.ai/v1/automation/run-sse
-URL: https://www.reddit.com/r/{subreddit}/search/?q={CODE}&sort=relevance&t=all
-browser_profile: stealth
-
-GOAL:
-Extract student reviews of {CODE} at {UNIVERSITY} from this Reddit search page.
-You are already on the results. Act efficiently:
-1. Scan titles. Click only posts clearly about {CODE} — reviews, advice, experience. Max 2 posts.
-2. Read post body and top 5-8 comments only. Do NOT scroll or load more.
-3. Extract: workload, difficulty, grading, exam tips, professor mentions, recommendation.
-4. Return immediately as JSON:
-{
-  "reviews": ["student quote or paraphrase with context", ...],
-  "workloadMentions": ["..."],
-  "examTips": ["..."],
-  "professorMentions": ["..."],
-  "gradingInfo": ["..."]
-}
-Max 2 posts. Do not click anything unrelated.
+```bash
+tinyfish agent run \
+  --url "https://www.reddit.com/r/{subreddit}/search/?q={CODE}&sort=relevance&t=all" \
+  "Extract student reviews of {CODE} at {UNIVERSITY} from this Reddit search page.
+  You are already on the results. Act efficiently:
+  1. Scan titles. Click only posts clearly about {CODE} — reviews, advice, experience. Max 2 posts.
+  2. Read post body and top 5-8 comments only. Do NOT scroll or load more.
+  3. Extract: workload, difficulty, grading, exam tips, professor mentions, recommendation.
+  4. Return immediately as JSON:
+  { \"reviews\": [\"...\"], \"workloadMentions\": [\"...\"], \"examTips\": [\"...\"], \"professorMentions\": [\"...\"], \"gradingInfo\": [\"...\"] }
+  Max 2 posts. Do not click anything unrelated."
 ```
 
 ### Agent: Course Platform (only if URL found in Step 1)
-```
-POST https://agent.tinyfish.ai/v1/automation/run-sse
-URL: {courseplatformUrl}
-browser_profile: stealth
-
-GOAL:
-Extract reviews and ratings for {CODE}. You are already on the page — do NOT navigate away.
-Read only what is visible: overall rating, workload rating, difficulty rating, written reviews.
-Return as JSON:
-{ "overallRating": 4.1, "workloadRating": 3.5, "difficultyRating": 3.8, "reviews": ["...", ...] }
+```bash
+tinyfish agent run \
+  --url "{courseplatformUrl}" \
+  "Extract reviews and ratings for {CODE}. You are already on the page — do NOT navigate away.
+  Read only what is visible: overall rating, workload rating, difficulty rating, written reviews.
+  Return as JSON:
+  { \"overallRating\": 4.1, \"workloadRating\": 3.5, \"difficultyRating\": 3.8, \"reviews\": [\"...\"] }"
 ```
 
 ### Agent: Official Course Page (only if URL found in Step 1)
-```
-POST https://agent.tinyfish.ai/v1/automation/run-sse
-URL: {officialUrl}
-browser_profile: stealth
-
-GOAL:
-Extract official info for {CODE}. You are on the page — do NOT navigate.
-Get: title, description, learning outcomes, topics, prerequisites, assessment breakdown.
-Return as JSON:
-{ "title": "...", "description": "...", "learningOutcomes": ["..."], "topics": ["..."], "prerequisites": "...", "assessmentBreakdown": "..." }
+```bash
+tinyfish agent run \
+  --url "{officialUrl}" \
+  "Extract official info for {CODE}. You are on the page — do NOT navigate.
+  Get: title, description, learning outcomes, topics, prerequisites, assessment breakdown.
+  Return as JSON:
+  { \"title\": \"...\", \"description\": \"...\", \"learningOutcomes\": [\"...\"], \"topics\": [\"...\"], \"prerequisites\": \"...\", \"assessmentBreakdown\": \"...\" }"
 ```
 
 ### Agent: Student Blogs
-```
-POST https://agent.tinyfish.ai/v1/automation/run-sse
-URL: https://www.google.com/search?q={blogQuery}
-browser_profile: stealth
-
-GOAL:
-Find student blog reviews of {CODE} at {UNIVERSITY}.
-You are on Google results. Act efficiently:
-1. Scan results. Click only if title/snippet clearly indicates a personal student review of {CODE}. Max 3.
-2. On each article, read main content only. Extract verdict, workload, exam tips, recommendation.
-3. Return as JSON:
-{ "reviews": ["paraphrase of experience and advice", ...], "source_urls": ["url", ...] }
-If nothing looks relevant, return { "reviews": [], "source_urls": [] } immediately.
+```bash
+tinyfish agent run \
+  --url "https://www.google.com/search?q={blogQuery}" \
+  "Find student blog reviews of {CODE} at {UNIVERSITY}.
+  You are on Google results. Act efficiently:
+  1. Scan results. Click only if title/snippet clearly indicates a personal student review of {CODE}. Max 3.
+  2. On each article, read main content only. Extract verdict, workload, exam tips, recommendation.
+  3. Return as JSON:
+  { \"reviews\": [\"paraphrase of experience and advice\"], \"source_urls\": [\"url\"] }
+  If nothing looks relevant, return { \"reviews\": [], \"source_urls\": [] } immediately."
 ```
 
 ---
@@ -208,6 +191,10 @@ Rules: score = genuine sentiment · at least 8 real student quotes · "Unknown" 
 Always include: Score & verdict · Summary · Key stats (difficulty, workload, hrs/week, exam, grade, attendance) · Tags · Best for / Not great if · What you'll learn · At least 4-6 student quotes with source labels.
 
 ---
+
+## Security Notes
+- This skill scrapes live user-generated content from public sites. All scraped data is passed to an LLM for synthesis only, not executed.
+- Only use your own TinyFish account authenticated via `tinyfish auth login`.
 
 ## Notes
 - Skip and note any TinyFish source that errors
